@@ -1,0 +1,384 @@
+---
+title: "Costa Rica: características de la generación eléctrica renovable"
+author: "Ramón A. Montás Alfaro"
+date: "23/4/2021"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+# Introducción
+
+Según el Informe Anual Generación y Demanda, publicado por el Centro Nacional de Control de Energía, el 99.15% de la generación provino de fuentes renovables en el 2019. El objetivo de este análisis es encontrar características comunes de cada planta con respecto a su generación durante el año.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F, cache = F)
+
+# Librerías ----
+suppressMessages(suppressWarnings(library(readr))) 
+suppressMessages(suppressWarnings(library(dplyr)))
+suppressMessages(suppressWarnings(library(tidyr)))
+suppressMessages(suppressWarnings(library(kableExtra)))
+suppressMessages(suppressWarnings(library(ggplot2)))
+suppressMessages(suppressWarnings(library(ggcorrplot)))
+
+```
+
+```{r}
+
+# Importar los datos
+suppressMessages(
+datos <- read_delim("T1_datosResumenAnual2019.csv",
+                    ";", escape_double = FALSE, trim_ws = TRUE)
+)
+
+# Filtro datos faltantes
+datos <- datos %>% 
+  gather("Mes", "MWh", -Planta, -Fuente)%>% 
+  filter(!is.na(MWh))
+
+suppressMessages(
+datos <- datos %>% select(Planta, MWh) %>% 
+  group_by(Planta) %>% 
+  summarise(SumaCero = (sum(MWh)==0)) %>% 
+  ungroup() %>% 
+  filter(!SumaCero) %>% select(-SumaCero) %>% 
+  left_join(datos, by = "Planta") %>% 
+  group_by(Planta) %>% 
+  mutate(MWh.s = scale(MWh)) %>% 
+  ungroup()
+)
+
+# Estadisticos por planta
+suppressMessages(
+estadisticosPlanta <- datos %>% 
+  group_by(Planta) %>% 
+  summarise(Media.MWh = mean(MWh),
+            Median.MWh = median(MWh),
+            SD.MWh = sd(MWh))
+)
+
+# Datos para el análisis multivariado
+datosAM <- datos %>% 
+  select(-MWh) %>% 
+  spread(Mes, MWh.s, fill = 0)
+datosAM <- datosAM[,c("Planta", "Fuente", "Enero", "Febrero", "Marzo",
+                  "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre",
+                  "Octubre", "Noviembre", "Diciembre")]
+write.table(datosAM, file = "datosAnalisisMultivariado.csv", sep = ";")
+
+```
+
+# Datos utilizados
+
+Los datos analizados corresponden a la energía generada en MWh por mes, según la planta y la fuente. El Cuadro 1 presenta una muestra de generación por mes para las primeras seis plantas de generación. Esto, durante el primer semestre del 2019.
+
+<br>
+
+**Cuadro 1**
+
+**Costa Rica: Energía generada por mes según Planta y Fuente, 2019**
+
+```{r}
+
+# Reordeno columnas
+datosTabla <- datos %>% 
+  select(-MWh.s) %>% 
+  mutate(MWh = round(MWh, digits = 1)) %>% 
+  mutate(MWh = format(MWh, big.mark = " ")) %>% 
+  mutate(MWh = text_spec(MWh, align = "r")) %>% 
+  spread(Mes, MWh)
+datosTabla <- datosTabla[,c("Planta", "Fuente", "Enero", "Febrero", "Marzo",
+                  "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre",
+                  "Octubre", "Noviembre", "Diciembre")]
+ datosTabla[,1:8] %>% head() %>% 
+  kbl(caption.short = "Primer semestre", escape = F, align = "llrrrrrr") %>% 
+  kable_classic(lightable_options = c("hover"), font_size =12, full_width =T)  %>% 
+  add_header_above(c(" " = 2, "Generación bruta (MWh)" = 6), bold = T) %>% 
+  row_spec(0, bold = T) %>% 
+  footnote(general = "Informe Anual 2019. ICE. https://apps.grupoice.com/CenceWeb/CenceDescargaArchivos.jsf?init=true&categoria=3&codigoTipoArchivo=3008", 
+           general_title = "Fuente:")
+  
+```
+
+# Variabilidad de los datos
+
+Dadas las grandes diferencias en la capacidad de los generadores, se realiza un escalamiento por planta. Este escalamiento consiste en restar la generación media anual de cada planta a su generación mensual y dividir entre su desviación estándar.
+
+<br>
+**Grafico 1**
+
+**Distribución de la generación por planta para valores escalados y no escalados**
+
+```{r}
+
+# Datos escalados
+suppressMessages(suppressWarnings(
+datosG1 <- datos %>% 
+  gather("Escalado", "Valor", -"Planta", -"Fuente", -"Mes") %>% 
+  filter(!is.na(Valor))
+))
+
+g <- ggplot(data = datosG1, aes(x = as.factor(Planta), y = Valor)) +
+  geom_boxplot() +
+  facet_wrap(~Escalado, scales = "free_y", ncol = 1, 
+             labeller = labeller(Escalado = c("MWh" = "No escalado",
+                                              "MWh.s" = "Escalado"))) +
+  coord_cartesian(xlim = c(1,6)) +
+  ylab("Generación") +
+  xlab("Planta") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle=90))
+
+g
+
+ggsave("escalamiento.png", g, device = "png", dpi = 700, 
+       width = 10, height = 10, units = "cm")
+
+
+```
+
+```{r, eval = F}
+# Variabilidad por planta
+datosVarPlanta <- datos %>% 
+  group_by(Planta) %>% 
+  summarise(Variancia = var(MWh),
+            Variancia.s = var(MWh.s)) %>% 
+  ungroup()
+
+plot(datosVarPlanta$Variancia)
+
+```
+
+# Análisis en componentes principales
+
+A partir de la función `PCA` de la librería `FactoMineR`, se realiza el análisis en componentes principales para los datos.
+
+El Gráfico 2 muestra el comportamiento de los autovalores por componente. Si se utiliza el criterio de la magnitud del valor característico, es suficiente con considerar tres componentes para el análisis.
+
+<br>
+**Grafico 2**
+
+**Gráfico de sedimentación**
+
+```{r, eval = T}
+# ACP Datos escalados
+resACP <- FactoMineR::PCA(datosAM[,3:14], graph = F)
+
+# Gráfico de sedimentación
+varExplicada <- data.frame(Autovalor = resACP$eig[,1],
+                           PctCum = resACP$eig[,3],
+                           Componente = 1:12)
+
+par(mar = c(5,4,0,0))
+plot(Autovalor~Componente, varExplicada, type = "b")
+grid(nx = NA, ny = NULL)
+
+```
+
+Fuente: Elaboración propia con datos del Informe Anual 2019. ICE. https://apps.grupoice.com/CenceWeb/CenceDescargaArchivos.jsf?init=true&categoria=3&codigoTipoArchivo=3008
+<br>
+<br>
+
+El Gráfico 3, muestra el porcentaje acumulado de variabilidad explicada. Para cubrir al menos un 80% de la variabilidad de los datos, es necesario considerar hasta la Componente No. 4.
+ 
+<br>
+**Grafico 3**
+
+**Porcentaje acumulado de variabilidad explicada**
+
+```{r}
+par(mar = c(5,4,0,0))
+plot(PctCum~Componente, varExplicada, type = "b",
+     ylab = "Variabilidad explicada acum (%)")
+grid(nx = NA, ny = NULL)
+```
+
+Fuente: Elaboración propia con datos del Informe Anual 2019. ICE. https://apps.grupoice.com/CenceWeb/CenceDescargaArchivos.jsf?init=true&categoria=3&codigoTipoArchivo=3008
+<br>
+<br>
+
+El Gráfico 4, muestra el resultado del ACP para las primeras dos dimensiones.
+ 
+<br>
+**Grafico 4**
+
+**Biplot: Individuos y variables en las componentes 1 y 2 del ACP**
+
+```{r, fig.width=8, fig.height=6}
+
+factoextra::fviz_pca_biplot(resACP,
+                            habillage = as.factor(datosAM$Fuente)) +
+  ggtitle("")
+
+```
+
+Se identifican diferentes tipos de plantas tipo Hidro:
+
++ G1: c(9,6,8,64,44,29,7,75,41,42)
++ G2: c(85,14,15,68,39, 81,3)
++ G3: c(4,23,73)
++ G4: c(26,24,67, 62,92,88)
+
+<br>
+**Grafico 5**
+
+**Subgrupos de generadores Hiro**
+
+```{r, fig.width=8, fig.height=10}
+dvlvNumeroMes <- function(x){
+  meses <- c("Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", 
+           "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", 
+           "Diciembre")
+  n <- sapply(x, function(xi) which(meses == xi), simplify = "array")
+  return(as.vector(n))
+}
+
+# Grupo hidro 1
+datosG <- datosAM %>% 
+  select(Planta) %>% 
+  mutate(Id = row_number()) %>% 
+  right_join(datos, by = "Planta") %>% 
+  mutate(Mes.n = dvlvNumeroMes(Mes)) 
+
+datosG2 <- datosG %>% 
+  mutate(Grupo = ifelse(Id %in% c(9,6,8,64,44,29,7,75,41,42), "G1",
+                        ifelse(Id %in% c(85,14,15,68,39, 81,3), "G2",
+                               ifelse(Id %in% c(4,23,73), "G3",
+                                      ifelse(Id %in% c(26,24,67, 62,92,88), "G4",
+                                             NA))))) %>% 
+  filter(!is.na(Grupo)) %>% 
+  group_by(Planta) %>% 
+  arrange(Mes.n) %>% 
+  ungroup()
+datosG2$Planta <- as.factor(datosG2$Planta)
+
+ggplot(data = datosG2, aes(x = as.factor(Mes.n), y = MWh.s, color = as.factor(Id), 
+                           shape = as.factor(Grupo), group = as.factor(Id))) +
+  geom_line() +
+  geom_point() +
+  ylab("Generación escalada") +
+  xlab("Mes") +
+  scale_color_discrete(name="Id.Planta") +
+  scale_shape_discrete(name = "", guide = F)+
+  facet_wrap(~Grupo, ncol = 1) +
+  theme_bw()
+
+```
+
+Hallazgos:
+
++ Es muy marcada la variabilidad a raiz de la estacionalidad en el eje x.
++ Los meses de verano se caracterizan por el uso de termico, eólico y algunas plantas hidroeléctricas con capacidad de almacenamiento suficiente.
++ Los meses de invierno se caracterizan por el uso de fuentes hidráulicas.
++ En el eje vertical se ubican plantas con un aporte importante en la época de transición, pero no queda muy claro cuál es la característica predominante.
++ El Grafico 5 permite observar el sub agrupamiento que se logra después del análisis.
+
+<br>
+**Grafico 6**
+
+**Biplot: Individuos y variables en las componentes 1 y 3 del ACP**
+
+```{r, fig.width=8, fig.height=6}
+
+factoextra::fviz_pca_biplot(resACP,
+                            habillage = as.factor(datosAM$Fuente),
+                            axes = c(1,3)) +
+  ggtitle("")
+
+```
+
+Se identifican otras características:
+
++ G5: c(26,92,65,45)
+
+<br>
+**Grafico 7**
+
+**Diferenciación entre generadores no típicos I**
+
+```{r, fig.width=8}
+datosG3 <- datosG %>% 
+  mutate(Grupo = ifelse(Id %in% c(26,92,65,45), "G5",
+                        NA)) %>% 
+  filter(!is.na(Grupo)) %>% 
+  group_by(Planta) %>% 
+  arrange(Mes.n) %>% 
+  ungroup()
+
+  
+  
+datosG3$Planta <- as.factor(datosG3$Planta)
+
+ggplot(data = datosG3, aes(x = as.factor(Mes.n), y = MWh.s, color = as.factor(Id), 
+                           shape = as.factor(Grupo), group = as.factor(Id))) +
+  geom_line() +
+  geom_point() +
+  ylab("Generación escalada") +
+  xlab("Mes") +
+  scale_color_discrete(name="Id.Planta") +
+  scale_shape_discrete(name = "", guide = F)+
+  facet_wrap(~Grupo, ncol = 1) +
+  theme_bw()
+
+```
+
+Hallazgos:
+
++ Se identifican otras semejanzas que permiten agrupar o diferenciar generadores por su comportamiento. Por ejemplo:
+   - 26 y 92 se comportan de manera similar
+   - 65 y 26 presentan una correlación negativa evidente, al igual que 45 y 92.
+
+<br>
+**Grafico 8**
+
+**Biplot: Individuos y variables en las componentes 1 y 4 del ACP**
+
+```{r, fig.width=8, fig.height=6}
+
+factoextra::fviz_pca_biplot(resACP,
+                            habillage = as.factor(datosAM$Fuente),
+                            axes = c(1,4)) +
+  ggtitle("")
+
+```
+
+
+Se identifican otras características:
+
++ G6: c(74,40,45,33,62)
+
+<br>
+**Grafico 9**
+
+**Diferenciación entre generadores no típicos II**
+
+```{r, fig.width=8}
+datosG4 <- datosG %>% 
+  mutate(Grupo = ifelse(Id %in% c(74,40,45,33,62), "G6",
+                        NA)) %>% 
+  filter(!is.na(Grupo)) %>% 
+  group_by(Planta) %>% 
+  arrange(Mes.n) %>% 
+  ungroup()
+
+  
+  
+datosG4$Planta <- as.factor(datosG4$Planta)
+
+ggplot(data = datosG4, aes(x = as.factor(Mes.n), y = MWh.s, color = as.factor(Id), 
+                           shape = as.factor(Grupo), group = as.factor(Id))) +
+  geom_line() +
+  geom_point() +
+  ylab("Generación escalada") +
+  xlab("Mes") +
+  scale_color_discrete(name="Id.Planta") +
+  scale_shape_discrete(name = "", guide = F)+
+  facet_wrap(~Grupo, ncol = 1) +
+  theme_bw()
+
+```
+
+Hallazgos:
+
++ Se identifican generadores cuya participación se reduce considerablemente en junio y se contrasta con otros generadores que presentan un comportamiento contrario.
