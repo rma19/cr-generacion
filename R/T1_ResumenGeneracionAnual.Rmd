@@ -28,7 +28,7 @@ suppressMessages(suppressWarnings(library(ggcorrplot)))
 
 # Importar los datos
 suppressMessages(
-datos <- read_delim("T1_datosResumenAnual2019.csv",
+datos <- read_delim("datos2019.csv",
                     ";", escape_double = FALSE, trim_ws = TRUE)
 )
 
